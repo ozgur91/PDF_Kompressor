@@ -27,6 +27,7 @@ class FallbackFont(str, Enum):
 class ResultKind(str, Enum):
     compressed = "compressed"
     fonts_only = "fonts_only"
+    sanitized = "sanitized"     # aktive Inhalte entfernt, Bilder unverändert
     original = "original"
 
 
@@ -62,6 +63,7 @@ class CompressionReport(BaseModel):
     dpi: int
     images_downsampled: int = 0
     fonts: list[FontInfo] = []
+    active_content_removed: list[str] = Field([], description="Entfernte aktive Inhalte (JavaScript, Aktionen, eingebettete Dateien …)")
     warnings: list[str] = []
 
     @property
@@ -85,3 +87,4 @@ class AnalyzeResponse(BaseModel):
     pages: int
     fonts: list[FontInfo]
     images: list[ImageInfo]
+    active_content: list[str] = Field([], description="Gefundene aktive Inhalte")

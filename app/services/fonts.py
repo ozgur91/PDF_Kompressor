@@ -24,6 +24,7 @@ from pikepdf import Array, Dictionary, Name
 
 from app.core.config import BUNDLED_FONT_DIR, get_settings
 from app.models import FallbackFont, FontInfo, FontStatus
+from app.services.guard import check_deadline
 from app.services.pdfwalk import iter_resources, object_key
 
 log = logging.getLogger(__name__)
@@ -479,6 +480,7 @@ def embed_missing_fonts(pdf: pikepdf.Pdf, fallback: FallbackFont) -> tuple[list[
     infos: list[FontInfo] = []
     warnings: list[str] = []
     for ref in collect_fonts(pdf):
+        check_deadline()
         name = strip_subset_prefix(str(ref.font.get("/BaseFont", "/Unbenannt")))
         subtype = ref.subtype.lstrip("/")
         if ref.embedded:
@@ -504,8 +506,9 @@ def embed_missing_fonts(pdf: pikepdf.Pdf, fallback: FallbackFont) -> tuple[list[
             try:
                 with load_ttfont(entry) as tt:
                     allowed, reason = embedding_allowed(tt)
-            except Exception as exc:
-                allowed, reason = False, f"Systemschrift nicht lesbar: {exc}"
+            except Exception:
+                log.warning("Systemschrift %s nicht lesbar", entry.path, exc_info=True)
+                allowed, reason = False, "Systemschrift nicht lesbar"
             if not allowed:
                 entry = None
         else:
@@ -517,9 +520,9 @@ def embed_missing_fonts(pdf: pikepdf.Pdf, fallback: FallbackFont) -> tuple[list[
 
         try:
             used = embed_simple_font(pdf, ref, req, entry, is_fallback)
-        except Exception as exc:
-            log.exception("Einbetten von %s fehlgeschlagen", name)
-            msg = f"Einbetten fehlgeschlagen: {exc}"
+        except Exception:
+            log.exception("Einbetten einer Schrift fehlgeschlagen")
+            msg = "Einbetten fehlgeschlagen"
             infos.append(FontInfo(name=name, subtype=subtype, status=FontStatus.skipped, reason=msg))
             warnings.append(f"Schrift '{name}': {msg}")
             continue

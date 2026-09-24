@@ -1,0 +1,10 @@
+# Direkte Laufzeit-Abhängigkeiten. Die gepinnte Lock-Datei requirements.txt wird daraus erzeugt:
+#   pip-compile --generate-hashes --strip-extras -o requirements.txt requirements.in
+fastapi
+uvicorn
+python-multipart
+pydantic-settings
+pikepdf
+Pillow
+fonttools
+pypdfium2

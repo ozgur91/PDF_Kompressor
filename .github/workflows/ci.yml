@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1"   # wöchentlich: neue CVEs in unveränderten Abhängigkeiten finden
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      # Actions sind auf Commit-SHAs gepinnt (Tags könnten nachträglich verschoben werden)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Abhängigkeiten installieren (nur mit passenden Hashes)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+      - name: Tests
+        run: python -m pytest -q
+      - name: Bekannte Schwachstellen (pip-audit)
+        run: |
+          python -m pip_audit -r requirements.txt --require-hashes
+          python -m pip_audit -r requirements-dev.txt --require-hashes
+      - name: Statische Code-Analyse (bandit)
+        run: python -m bandit -r app -ll
