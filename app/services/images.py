@@ -2,6 +2,7 @@
 
 import logging
 import math
+import warnings
 import zlib
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -10,10 +11,16 @@ import pikepdf
 from PIL import Image
 from pikepdf import Array, Dictionary, Name
 
+from app.core.config import get_settings
 from app.models import ImageInfo
+from app.services.guard import check_deadline
 from app.services.pdfwalk import page_resources
 
 log = logging.getLogger(__name__)
+
+# Pixel-Bomben: Pillow bricht über dieser Grenze ab (Warnung wird zum Fehler)
+Image.MAX_IMAGE_PIXELS = get_settings().max_image_pixels
+warnings.simplefilter("error", Image.DecompressionBombWarning)
 
 Matrix = tuple[float, float, float, float, float, float]
 IDENTITY: Matrix = (1, 0, 0, 1, 0, 0)
@@ -55,7 +62,9 @@ def _walk(stream_owner, resources: Dictionary | None, ctm: Matrix, pmap: Placeme
         return
 
     stack: list[Matrix] = []
-    for operands, operator in ops:
+    for i, (operands, operator) in enumerate(ops):
+        if i % 2048 == 0:
+            check_deadline()
         op = str(operator)
         if op == "q":
             stack.append(ctm)
@@ -99,6 +108,7 @@ def _record(img: pikepdf.Stream, ctm: Matrix, pmap: PlacementMap) -> None:
 def build_placement_map(pdf: pikepdf.Pdf) -> PlacementMap:
     pmap = PlacementMap()
     for page in pdf.pages:
+        check_deadline()
         user_unit = float(page.obj.get("/UserUnit", 1))
         _walk(page.obj, page_resources(page.obj), (user_unit, 0, 0, user_unit, 0, 0), pmap, 0, set())
     return pmap
@@ -167,7 +177,8 @@ def downsample_image(pdf: pikepdf.Pdf, img: pikepdf.Stream, scale: float, qualit
     if pil.mode not in ("RGB", "L"):
         return False
     new_size = (max(1, round(pil.width * scale)), max(1, round(pil.height * scale)))
-    resized = pil.resize(new_size, Image.Resampling.LANCZOS)
+    # reducing_gap: erst schnell ganzzahlig vorverkleinern, dann Lanczos - bei großen Scans ein Vielfaches schneller
+    resized = pil.resize(new_size, Image.Resampling.LANCZOS, reducing_gap=3.0)
 
     candidates = [(_encode_jpeg(resized, quality), Name.DCTDecode)]
     if "/DCTDecode" not in _filters(img):
@@ -180,7 +191,7 @@ def downsample_image(pdf: pikepdf.Pdf, img: pikepdf.Stream, scale: float, qualit
     old_size = _raw_len(img)
     new_total = len(data)
     if smask is not None:
-        mask_pil = pikepdf.PdfImage(smask).as_pil_image().convert("L").resize(new_size, Image.Resampling.LANCZOS)
+        mask_pil = pikepdf.PdfImage(smask).as_pil_image().convert("L").resize(new_size, Image.Resampling.LANCZOS, reducing_gap=3.0)
         new_mask = zlib.compress(mask_pil.tobytes(), 9)
         old_size += _raw_len(smask)
         new_total += len(new_mask)
@@ -209,8 +220,9 @@ def downsample_image(pdf: pikepdf.Pdf, img: pikepdf.Stream, scale: float, qualit
 
 def downsample_images(pdf: pikepdf.Pdf, target_dpi: int, quality: int, threshold: float) -> tuple[int, list[str]]:
     pmap = build_placement_map(pdf)
-    count, warnings = 0, []
+    count, notes = 0, []
     for usage in pmap.images.values():
+        check_deadline()
         if usage.min_dpi <= target_dpi * threshold:
             continue
         if skip_reason(usage.obj) is not None:
@@ -220,8 +232,8 @@ def downsample_images(pdf: pikepdf.Pdf, target_dpi: int, quality: int, threshold
                 count += 1
         except Exception as exc:
             log.warning("Bild %s nicht verarbeitet: %s", usage.obj.objgen, exc)
-            warnings.append(f"Bild {usage.obj.objgen[0]} konnte nicht verkleinert werden: {exc}")
-    return count, warnings
+            notes.append("Ein Bild konnte nicht verkleinert werden und bleibt unverändert")
+    return count, notes
 
 
 def analyze_images(pdf: pikepdf.Pdf) -> list[ImageInfo]:

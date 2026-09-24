@@ -7,6 +7,8 @@ import pikepdf
 import pypdfium2 as pdfium
 
 from app.services.fonts import count_unembedded
+from app.services.guard import check_deadline
+from app.services.sanitizer import find_active_content
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +24,7 @@ def _pages_to_render(n: int, full_max: int) -> list[int]:
     return sorted({*range(5), n - 1, *range(5, n, step)})
 
 
-def validate(data: bytes, expected_pages: int, max_unembedded: int, full_render_max: int) -> None:
+def validate(data: bytes, expected_pages: int, max_unembedded: int, full_render_max: int, require_no_active: bool = False) -> None:
     try:
         with pikepdf.open(BytesIO(data)) as pdf:
             if len(pdf.pages) != expected_pages:
@@ -30,6 +32,8 @@ def validate(data: bytes, expected_pages: int, max_unembedded: int, full_render_
             unembedded = count_unembedded(pdf)
             if unembedded > max_unembedded:
                 raise ValidationError(f"{unembedded} Schriften nicht eingebettet (erwartet höchstens {max_unembedded})")
+            if require_no_active and find_active_content(pdf):
+                raise ValidationError("aktive Inhalte nach der Bereinigung noch vorhanden")
     except pikepdf.PdfError as exc:
         raise ValidationError(f"Ergebnis nicht lesbar: {exc}") from exc
 
@@ -38,6 +42,7 @@ def validate(data: bytes, expected_pages: int, max_unembedded: int, full_render_
         if len(doc) != expected_pages:
             raise ValidationError("Seitenzahl beim Rendern abweichend")
         for i in _pages_to_render(len(doc), full_render_max):
+            check_deadline()
             page = doc[i]
             try:
                 page.render(scale=0.2).close()
